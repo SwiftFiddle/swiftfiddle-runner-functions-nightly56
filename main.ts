@@ -72,7 +72,9 @@ function runStream(
 ): Response {
   return new Response(
     mergeReadableStreams(
+      makeReadableStream("\x1b[38;2;127;168;183m"),
       spawn(makeVersionCommand()),
+      makeReadableStream("\x1b[0m"),
       spawn(makeSwiftCommand(parameters)),
     ),
     {
@@ -147,6 +149,17 @@ function resposeError(message: string, status: number): Response {
     message,
     { status },
   );
+}
+
+function makeReadableStream(text: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const readableStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(text));
+      controller.close();
+    },
+  });
+  return readableStream;
 }
 
 interface RequestParameters {
