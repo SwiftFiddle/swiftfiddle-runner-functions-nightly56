@@ -1,4 +1,5 @@
-import { serve } from "./deps.ts";
+import { serveListener } from "./deps.ts";
+import { mergeReadableStreams } from "./deps.ts";
 
 async function handler(req: Request): Promise<Response> {
   switch (req.method) {
@@ -7,14 +8,11 @@ async function handler(req: Request): Promise<Response> {
       switch (url.pathname) {
         case "/": {
           const version = await swiftVersion();
-          return new Response(JSON.stringify({ status: "pass", version }));
+          return responseJSON({ status: "pass", version });
         }
         case "/healthz": {
           const version = await swiftVersion();
-          return new Response(JSON.stringify({ status: "pass", version }));
-        }
-        default: {
-          break;
+          return responseJSON({ status: "pass", version });
         }
       }
       break;
@@ -23,44 +21,89 @@ async function handler(req: Request): Promise<Response> {
       const url = new URL(req.url);
       switch (url.pathname) {
         case "/runner/nightly-5.6/run": {
-          if (req.body) {
-            const parameters: ExecutionRequestParameters = await req.json();
-            if (!parameters.code) {
-              return new Response("No code provided", { status: 400 });
-            }
-            const result = await run(parameters);
-            return new Response(JSON.stringify(result));
+          if (!req.body) {
+            return resposeError("No body", 400);
           }
-          break;
-        }
-        default: {
-          break;
+
+          const parameters: RequestParameters = await req.json();
+          if (!parameters.code) {
+            return resposeError("No code", 400);
+          }
+
+          if (!parameters._streaming) {
+            return runOutput(parameters);
+          }
+
+          return runStream(parameters);
         }
       }
       break;
     }
-    default: {
-      break;
-    }
   }
 
-  return new Response("Not found", { status: 404 });
+  return resposeError("Not found", 404);
 }
 
 async function swiftVersion(): Promise<string> {
-  const command = new Deno.Command(
-    "swift",
-    { args: ["-version"] },
+  const command = makeVersionCommand();
+  return await output(command);
+}
+
+async function runOutput(
+  parameters: RequestParameters,
+): Promise<Response> {
+  const version = await swiftVersion();
+
+  const { stdout, stderr } = await makeSwiftCommand(parameters).output();
+  const output = new TextDecoder().decode(stdout);
+  const errors = new TextDecoder().decode(stderr);
+
+  return responseJSON(
+    new RunResponse(
+      output,
+      errors,
+      version,
+    ),
   );
+}
+
+function runStream(
+  parameters: RequestParameters,
+): Response {
+  return new Response(
+    mergeReadableStreams(
+      spawn(makeVersionCommand()),
+      spawn(makeSwiftCommand(parameters)),
+    ),
+    {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+      },
+    },
+  );
+}
+
+async function output(command: Deno.Command): Promise<string> {
   const { stdout } = await command.output();
   return new TextDecoder().decode(stdout);
 }
 
-async function run(
-  parameters: ExecutionRequestParameters,
-): Promise<ExecutionResponse> {
-  const version = await swiftVersion();
+function spawn(command: Deno.Command): ReadableStream<Uint8Array> {
+  const process = command.spawn();
+  return mergeReadableStreams(
+    process.stdout,
+    process.stderr,
+  );
+}
 
+function makeVersionCommand(): Deno.Command {
+  return new Deno.Command(
+    "swift",
+    { args: ["-version"], stdout: "piped", stderr: "piped" },
+  );
+}
+
+function makeSwiftCommand(parameters: RequestParameters): Deno.Command {
   const options = parameters.options || "";
   const timeout = parameters.timeout || 30;
   const color = parameters._color || false;
@@ -71,34 +114,50 @@ async function run(
     }
     : undefined;
 
-  const command = new Deno.Command(
+  return new Deno.Command(
     "sh",
     {
       args: [
         "-c",
         `echo '${parameters.code}' | timeout ${timeout} swift ${options} -`,
       ],
-      env: env,
+      env,
+      stdout: "piped",
+      stderr: "piped",
     },
-  );
-  const { stdout, stderr } = await command.output();
-  return new ExecutionResponse(
-    new TextDecoder().decode(stdout),
-    new TextDecoder().decode(stderr),
-    version,
   );
 }
 
-interface ExecutionRequestParameters {
+function responseJSON(
+  json: unknown,
+): Response {
+  return new Response(
+    JSON.stringify(json),
+    {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+      },
+    },
+  );
+}
+
+function resposeError(message: string, status: number): Response {
+  return new Response(
+    message,
+    { status },
+  );
+}
+
+interface RequestParameters {
   command?: string;
   options?: string;
   code?: string;
   timeout?: number;
   _color?: boolean;
-  _nonce?: string;
+  _streaming?: boolean;
 }
 
-class ExecutionResponse {
+class RunResponse {
   output: string;
   errors: string;
   version: string;
@@ -110,4 +169,5 @@ class ExecutionResponse {
   }
 }
 
-serve(handler, { port: 8000 });
+const listener = Deno.listen({ port: 8000 });
+await serveListener(listener, handler);
