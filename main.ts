@@ -72,9 +72,18 @@ function runStream(
 ): Response {
   return new Response(
     mergeReadableStreams(
-      makeReadableStream("\x1b[38;2;127;168;183m"),
-      spawn(makeVersionCommand()),
-      makeReadableStream("\x1b[0m"),
+      spawn(makeVersionCommand()).pipeThrough(
+        new TransformStream<Uint8Array, Uint8Array>({
+          transform(chunk, controller) {
+            const text = new TextDecoder().decode(chunk);
+            controller.enqueue(
+              new TextEncoder().encode(
+                `\u001b[38;2;127;168;183m${text}\u001b[0m`,
+              ),
+            );
+          },
+        }),
+      ),
       spawn(makeSwiftCommand(parameters)),
     ),
     {
