@@ -12,16 +12,16 @@ RUN apt-get -qq update \
 WORKDIR /app
 
 RUN echo 'int isatty(int fd) { return 1; }' | \
-  clang -O2 -fpic -shared -ldl -o faketty.so -xc -
-RUN strip faketty.so && chmod 400 faketty.so
+  clang -O2 -fpic -shared -ldl -o faketty.so -xc - \
+  && strip faketty.so && chmod 400 faketty.so
 
 ENV PATH "/root/.deno/bin:$PATH"
 
 COPY deps.ts .
-RUN deno cache --reload --unstable deps.ts
+RUN deno cache deps.ts
 
 ADD . .
-RUN deno cache --reload --unstable main.ts
+RUN deno cache main.ts
 
 EXPOSE 8000
-CMD ["deno", "run", "--allow-env", "--allow-net", "--allow-run", "main.ts"]
+CMD ["deno", "run", "--allow-net", "--allow-run", "main.ts"]
