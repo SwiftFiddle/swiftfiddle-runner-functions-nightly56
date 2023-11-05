@@ -26,6 +26,24 @@ Deno.serve({
       }
       return runStream(parameters);
     },
+    "/runner/:version/run_{/}?": async (req) => {
+      if (req.method !== "POST") {
+        return resposeError("Bad request", 400);
+      }
+      if (!req.body) {
+        return resposeError("Bad request", 400);
+      }
+
+      const parameters: RequestParameters = await req.json();
+      if (!parameters.code) {
+        return resposeError("Bad request", 400);
+      }
+
+      if (!parameters._streaming) {
+        return runOutput(parameters);
+      }
+      return runStream(parameters);
+    },
   }),
 });
 
