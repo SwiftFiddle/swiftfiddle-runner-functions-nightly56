@@ -23,5 +23,5 @@ RUN deno cache deps.ts
 ADD . .
 RUN deno cache main.ts
 
-EXPOSE 8000
-CMD ["deno", "run", "--allow-net", "--allow-run", "main.ts"]
+EXPOSE 8080
+CMD ["deno", "run", "--allow-env", "--allow-net", "--allow-run", "main.ts"]

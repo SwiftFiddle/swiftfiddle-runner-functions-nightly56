@@ -1,52 +1,36 @@
-import { serveListener } from "./deps.ts";
-import { mergeReadableStreams } from "./deps.ts";
+import { mergeReadableStreams, router, serveFile } from "./deps.ts";
 
-async function handler(req: Request): Promise<Response> {
-  switch (req.method) {
-    case "GET": {
-      const url = new URL(req.url);
-      switch (url.pathname) {
-        case "/": {
-          const version = await swiftVersion();
-          return responseJSON({ status: "pass", version });
-        }
-        case "/healthz": {
-          const version = await swiftVersion();
-          return responseJSON({ status: "pass", version });
-        }
+Deno.serve({
+  port: 8080,
+  handler: router({
+    "/": (req) => serveFile(req, "./dist/index.html"),
+    "/health{z}?{/}?": async () => {
+      const version = await swiftVersion();
+      return responseJSON({ status: "pass", version });
+    },
+    "/runner/:version/run{/}?": async (req) => {
+      if (!req.body) {
+        return resposeError("Bad request", 400);
       }
-      break;
-    }
-    case "POST": {
-      const url = new URL(req.url);
-      switch (url.pathname) {
-        case "/runner/nightly-5.6/run": {
-          if (!req.body) {
-            return resposeError("No body", 400);
-          }
 
-          const parameters: RequestParameters = await req.json();
-          if (!parameters.code) {
-            return resposeError("No code", 400);
-          }
-
-          if (!parameters._streaming) {
-            return runOutput(parameters);
-          }
-
-          return runStream(parameters);
-        }
+      const parameters: RequestParameters = await req.json();
+      if (!parameters.code) {
+        return resposeError("Bad request", 400);
       }
-      break;
-    }
-  }
 
-  return resposeError("Not found", 404);
-}
+      if (!parameters._streaming) {
+        return runOutput(parameters);
+      }
+      return runStream(parameters);
+    },
+    "/:file": (req, _ctx, match) => serveFile(req, `./dist/${match.file}`),
+  }),
+});
 
 async function swiftVersion(): Promise<string> {
   const command = makeVersionCommand();
-  return await output(command);
+  const { stdout } = await command.output();
+  return new TextDecoder().decode(stdout);
 }
 
 async function runOutput(
@@ -59,7 +43,7 @@ async function runOutput(
   const errors = new TextDecoder().decode(stderr);
 
   return responseJSON(
-    new RunResponse(
+    new OutputResponse(
       output,
       errors,
       version,
@@ -72,19 +56,8 @@ function runStream(
 ): Response {
   return new Response(
     mergeReadableStreams(
-      spawn(makeVersionCommand()).pipeThrough(
-        new TransformStream<Uint8Array, Uint8Array>({
-          transform(chunk, controller) {
-            const text = new TextDecoder().decode(chunk);
-            controller.enqueue(
-              new TextEncoder().encode(
-                `\u001b[38;2;127;168;183m${text}\u001b[0m`,
-              ),
-            );
-          },
-        }),
-      ),
-      spawn(makeSwiftCommand(parameters)),
+      spawn(makeVersionCommand(), "version", "version"),
+      spawn(makeSwiftCommand(parameters), "stdout", "stderr"),
     ),
     {
       headers: {
@@ -95,16 +68,15 @@ function runStream(
   );
 }
 
-async function output(command: Deno.Command): Promise<string> {
-  const { stdout } = await command.output();
-  return new TextDecoder().decode(stdout);
-}
-
-function spawn(command: Deno.Command): ReadableStream<Uint8Array> {
+function spawn(
+  command: Deno.Command,
+  stdoutKey: string,
+  stderrKey: string,
+): ReadableStream<Uint8Array> {
   const process = command.spawn();
   return mergeReadableStreams(
-    process.stdout,
-    process.stderr,
+    makeStreamResponse(process.stdout, stdoutKey),
+    makeStreamResponse(process.stderr, stderrKey),
   );
 }
 
@@ -140,9 +112,25 @@ function makeSwiftCommand(parameters: RequestParameters): Deno.Command {
   );
 }
 
-function responseJSON(
-  json: unknown,
-): Response {
+function makeStreamResponse(
+  stream: ReadableStream<Uint8Array>,
+  key: string,
+): ReadableStream<Uint8Array> {
+  return stream.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        const text = new TextDecoder().decode(chunk);
+        controller.enqueue(
+          new TextEncoder().encode(
+            `${JSON.stringify(new StreamResponse(key, text))}\n`,
+          ),
+        );
+      },
+    }),
+  );
+}
+
+function responseJSON(json: unknown): Response {
   return new Response(
     JSON.stringify(json),
     {
@@ -154,21 +142,7 @@ function responseJSON(
 }
 
 function resposeError(message: string, status: number): Response {
-  return new Response(
-    message,
-    { status },
-  );
-}
-
-function makeReadableStream(text: string): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  const readableStream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(text));
-      controller.close();
-    },
-  });
-  return readableStream;
+  return new Response(message, { status });
 }
 
 interface RequestParameters {
@@ -180,7 +154,7 @@ interface RequestParameters {
   _streaming?: boolean;
 }
 
-class RunResponse {
+class OutputResponse {
   output: string;
   errors: string;
   version: string;
@@ -192,5 +166,12 @@ class RunResponse {
   }
 }
 
-const listener = Deno.listen({ port: 8000 });
-await serveListener(listener, handler);
+class StreamResponse {
+  kind: string;
+  text: string;
+
+  constructor(kind: string, text: string) {
+    this.kind = kind;
+    this.text = text;
+  }
+}
