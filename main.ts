@@ -1,7 +1,7 @@
 import { mergeReadableStreams, router, serveFile } from "./deps.ts";
 
 Deno.serve({
-  port: 8080,
+  port: 8000,
   handler: router({
     "/": (req) => serveFile(req, "./dist/index.html"),
     "/health{z}?{/}?": async () => {
@@ -9,6 +9,9 @@ Deno.serve({
       return responseJSON({ status: "pass", version });
     },
     "/runner/:version/run{/}?": async (req) => {
+      if (req.method !== "POST") {
+        return resposeError("Bad request", 400);
+      }
       if (!req.body) {
         return resposeError("Bad request", 400);
       }
@@ -23,7 +26,6 @@ Deno.serve({
       }
       return runStream(parameters);
     },
-    "/:file": (req, _ctx, match) => serveFile(req, `./dist/${match.file}`),
   }),
 });
 
