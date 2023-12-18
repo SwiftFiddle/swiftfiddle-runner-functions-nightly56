@@ -27,3 +27,9 @@ jobs:
           branch: deno-dependency-updates
           author: GitHub <noreply@github.com>
           delete-branch: true
+          token: ${{ secrets.GH_PAT }}
+      - name: Enable Pull Request Automerge
+        if: ${{ steps.cpr.outputs.pull-request-url }}
+        run: gh pr merge --merge --auto ${{ steps.cpr.outputs.pull-request-url }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}

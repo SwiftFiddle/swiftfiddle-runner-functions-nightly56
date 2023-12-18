@@ -1,12 +1,19 @@
-import { mergeReadableStreams, router, serveFile } from "./deps.ts";
+import { mergeReadableStreams, router } from "./deps.ts";
 
-Deno.serve({
-  port: 8000,
-  handler: router({
-    "/": (req) => serveFile(req, "./dist/index.html"),
-    "/health{z}?{/}?": async () => {
-      const version = await swiftVersion();
-      return responseJSON({ status: "pass", version });
+Deno.serve(
+  { port: 8000 },
+  router({
+    "/": () => {
+      return responseJSON({ status: "pass" });
+    },
+    "/health{z}?{/}?": () => {
+      return responseJSON({ status: "pass" });
+    },
+    "/runner/:version{/}?": async () => {
+      return await responseHealthCheck();
+    },
+    "/runner/:version/health{z}?{/}?": async () => {
+      return await responseHealthCheck();
     },
     "/runner/:version/run{/}?": async (req) => {
       if (req.method !== "POST") {
@@ -15,7 +22,6 @@ Deno.serve({
       if (!req.body) {
         return resposeError("Bad request", 400);
       }
-
       const parameters: RequestParameters = await req.json();
       if (!parameters.code) {
         return resposeError("Bad request", 400);
@@ -27,7 +33,7 @@ Deno.serve({
       return runStream(parameters);
     },
   }),
-});
+);
 
 async function swiftVersion(): Promise<string> {
   const command = makeVersionCommand();
@@ -35,9 +41,7 @@ async function swiftVersion(): Promise<string> {
   return new TextDecoder().decode(stdout);
 }
 
-async function runOutput(
-  parameters: RequestParameters,
-): Promise<Response> {
+async function runOutput(parameters: RequestParameters): Promise<Response> {
   const version = await swiftVersion();
 
   const { stdout, stderr } = await makeSwiftCommand(parameters).output();
@@ -53,9 +57,7 @@ async function runOutput(
   );
 }
 
-function runStream(
-  parameters: RequestParameters,
-): Response {
+function runStream(parameters: RequestParameters): Response {
   return new Response(
     mergeReadableStreams(
       spawn(makeVersionCommand(), "version", "version"),
@@ -84,13 +86,20 @@ function spawn(
 function makeVersionCommand(): Deno.Command {
   return new Deno.Command(
     "swift",
-    { args: ["-version"], stdout: "piped", stderr: "piped" },
+    {
+      args: ["-version"],
+      stdout: "piped",
+      stderr: "piped",
+    },
   );
 }
 
-function makeSwiftCommand(parameters: RequestParameters): Deno.Command {
+function makeSwiftCommand(
+  parameters: RequestParameters,
+): Deno.Command {
+  const command = parameters.command || "swift";
   const options = parameters.options || "";
-  const timeout = parameters.timeout || 30;
+  const timeout = parameters.timeout || 60;
   const color = parameters._color || false;
   const env = color
     ? {
@@ -104,9 +113,9 @@ function makeSwiftCommand(parameters: RequestParameters): Deno.Command {
     {
       args: [
         "-c",
-        `echo '${parameters.code}' | timeout ${timeout} swift ${options} -`,
+        `echo '${parameters.code}' | timeout ${timeout} ${command} ${options} -`,
       ],
-      env,
+      env: env,
       stdout: "piped",
       stderr: "piped",
     },
@@ -129,6 +138,11 @@ function makeStreamResponse(
       },
     }),
   );
+}
+
+async function responseHealthCheck(): Promise<Response> {
+  const version = await swiftVersion();
+  return responseJSON({ version });
 }
 
 function responseJSON(json: unknown): Response {
